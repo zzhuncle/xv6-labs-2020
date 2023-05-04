@@ -554,8 +554,8 @@ int u2kvmcopy(pagetable_t pagetable, pagetable_t kernel_pagetable, uint64 begin,
   uint64 pa, i;
   uint flags;
 
-  // 向上取整
-  for(i = PGROUNDUP(begin); i < end; i += PGSIZE) {
+  // 向上取整, 已经有数据的部分不能重新kalloc, 因此向上取整, 尽管可能会有一段没有被利用的地址空间
+  for(i = PGROUNDUP(begin); i < end; i += PGSIZE) { // i += 4096
     if((pte = walk(pagetable, i, 0)) == 0)
       panic("u2kvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
