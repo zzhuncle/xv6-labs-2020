@@ -379,6 +379,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
+  // lab3 q3
+  /*
   uint64 n, va0, pa0;
 
   while(len > 0){
@@ -394,8 +396,9 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     len -= n;
     dst += n;
     srcva = va0 + PGSIZE;
-  }
-  return 0;
+  } 
+  return 0; */
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -405,6 +408,8 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
+  // lab3 q3
+  /*
   uint64 n, va0, pa0;
   int got_null = 0;
 
@@ -438,5 +443,127 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  } */
+  return copyinstr_new(pagetable, dst, srcva, max);
+}
+
+// lab3 q1
+void vmprint(pagetable_t pagetable, uint64 depth) {
+  if (depth == 0)
+    printf("page table %p\n", pagetable); // 第一行是最高一级page directory的地址，这就是存在SATP或者将会存在SATP中的地址。
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if(pte & PTE_V){ // check valid
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      for (int i = 0;i < depth; i++)
+        printf(".. ");
+      printf("..");
+      printf("%d: pte %p pa %p\n", i, pte, child);
+      if ((pte & (PTE_R | PTE_W | PTE_X)) == 0) // 如果这一页可读、写或运行，那么就是最底层页表，不用继续遍历
+        vmprint((pagetable_t)child, depth + 1);
+    }
   }
+}
+
+// lab3 q2
+// 逻辑与 kvminit 基本一致, 
+// 用于在 allocproc 中初始化进程自己的内核页表
+pagetable_t kvminit_pagetable(void)
+{
+  pagetable_t kernel_pagetable = (pagetable_t) kalloc();
+  if (kernel_pagetable == 0)
+    return 0;
+  memset(kernel_pagetable, 0, PGSIZE);
+
+  // uart registers
+  kvmmap_pagetable(kernel_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  kvmmap_pagetable(kernel_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT 
+  // lab3 q3
+  // kvmmap_pagetable(kernel_pagetable, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  kvmmap_pagetable(kernel_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  kvmmap_pagetable(kernel_pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  kvmmap_pagetable(kernel_pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  kvmmap_pagetable(kernel_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return kernel_pagetable;
+};
+
+// lab3 q2
+void kvmmap_pagetable(pagetable_t kernel_pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
+    panic("kvmmap_pagetable");
+};
+
+// lab3 q2
+void freewalk_pagetable(pagetable_t kernel_pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = kernel_pagetable[i];
+    if((pte & PTE_V)){
+      kernel_pagetable[i] = 0;
+      // this PTE points to a lower-level page table.
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0) {
+        uint64 child = PTE2PA(pte);
+        freewalk_pagetable((pagetable_t)child);
+      }
+    } else if(pte & PTE_V){
+      panic("freewalk_pagetable: leaf");
+    }
+  }
+  kfree((void*)kernel_pagetable);
+}
+
+// translate a kernel virtual address to a physical address. only needed for addresses on the stack.
+// assumes va is page aligned.
+uint64 kvmpa_pagetable(pagetable_t kernel_pagetable, uint64 va)
+{
+  uint64 off = va % PGSIZE;
+  pte_t *pte;
+  uint64 pa;
+  
+  pte = walk(kernel_pagetable, va, 0);
+  if(pte == 0)
+    panic("kvmpa_pagetable");
+  if((*pte & PTE_V) == 0)
+    panic("kvmpa_pagetable");
+  pa = PTE2PA(*pte);
+  return pa+off;
+};
+
+// lab3 q3
+// copy the user page table into its kernel page table from begin to end
+int u2kvmcopy(pagetable_t pagetable, pagetable_t kernel_pagetable, uint64 begin, uint64 end)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  // 向上取整
+  for(i = PGROUNDUP(begin); i < end; i += PGSIZE) {
+    if((pte = walk(pagetable, i, 0)) == 0)
+      panic("u2kvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("u2kvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    // 清除PTE_U标志
+    flags = PTE_FLAGS(*pte) & (~PTE_U);
+    mappages(kernel_pagetable, i, PGSIZE, (uint64)pa, flags);
+  }
+  return 0;
 }

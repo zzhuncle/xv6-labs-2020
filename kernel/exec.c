@@ -116,6 +116,20 @@ exec(char *path, char **argv)
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
 
+  // lab3 q3
+  // exec() 函数用于替换进程镜像, 在替换之后会将原用户页表释放替换为新的用户页表, 因此需要同样更新进程的内核页表,
+  // 由于内核页表中虚拟地址实际上指向的也是用户空间的物理地址, 因此不需要像用户页表一样连同物理空间一并释放, 
+  // 而是使用 uvmunmap() 清除映射, 然后使用 u2kvmcopy() 进行页表的复制.
+  uvmunmap(p->kernel_pagetable, 0, PGROUNDUP(oldsz) / PGSIZE, 0);
+  if (u2kvmcopy(p->pagetable, p->kernel_pagetable, 0, p->sz) < 0){
+    goto bad;
+  }
+
+  // lab3 q1
+  // print vmtable
+  if (p->pid == 1) // the first proc
+    vmprint(p->pagetable, 0);
+
   return argc; // this ends up in a0, the first argument to main(argc, argv)
 
  bad:

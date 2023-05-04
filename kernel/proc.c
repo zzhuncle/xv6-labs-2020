@@ -31,6 +31,9 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
 
+      // lab3 q2
+      // 把内核映射放到到进程的内核栈里，之后进程的内核栈被映射到了自身的内核页表中
+      /*
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
       // guard page.
@@ -39,7 +42,8 @@ procinit(void)
         panic("kalloc");
       uint64 va = KSTACK((int) (p - proc));
       kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      p->kstack = va;*/
+
   }
   kvminithart();
 }
@@ -121,10 +125,35 @@ found:
     return 0;
   }
 
+  // lab3 q2
+  // 添加到allocproc函数里完成初始化kernel pagtable
+  p->kernel_pagetable = kvminit_pagetable();
+  if(p->kernel_pagetable == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 把内核映射放到到进程的内核栈里
+  // Allocate a page for the process's kernel stack.
+  // Map it high in memory, followed by an invalid
+  // guard page.
+  char *pa = kalloc();
+  if (pa == 0)
+    panic("kalloc");
+  // uint64 va = KSTACK((int) (p - proc));
+  // 值得一提的是, 由于每个进程有自己的内核页表, 因此不会像全局内核页表一样会有所有进程的内核栈,
+  // 因此映射时可以直接固定地址空间
+  uint64 va = KSTACK(0);
+  // 添加kernel stack的映射到用户的kernel pagetable里
+  kvmmap_pagetable(p->kernel_pagetable, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
+  // 设置了内核栈顶指针, 因此在这之前必须保证内核栈已经分配且映射完成. 否则指向就会出错
   p->context.sp = p->kstack + PGSIZE;
 
   return p;
@@ -139,8 +168,26 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // lab3 q2
+  // 之前我们将kernel stack的初始化移入了allocproc函数中，原来它是放在了内核的kernel pagetable里，
+  // 但现在放在了我们的kernel pagetable里，故先要对kernel stack进行查找释放
+  // 内核栈 p->kstack 需要在内核页表 p->kernel_pagetable 之前清除.
+  if (p->kstack) {
+    uint64 kstack_pa = kvmpa_pagetable(p->kernel_pagetable, p->kstack);
+    kfree((void*)kstack_pa);
+  }
+  p->kstack = 0;
+
+
+  // 对kernel pagetable的释放
+  if (p->kernel_pagetable)
+    freewalk_pagetable(p->kernel_pagetable);
+  p->kernel_pagetable = 0;
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -221,6 +268,10 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  // lab3 q3
+  // userinit() 函数用于初始化 xv6 启动时第一个用户进程, 该进程的加载是独立的, 因此也需要将其用户页表拷贝到内核页表
+  u2kvmcopy(p->pagetable, p->kernel_pagetable, 0, p->sz);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -243,11 +294,27 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    // lab3 q3
+    // 保证用户空间在 PLIC 之下
+    if (sz + n > PLIC) {
+      return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+      return -1;
+    }
+    // lab3 q3
+    // 在 uvmalloc() 分配新的内存后, 将新增的用户地址空间使用 u2kvmcopy() 复制到内核页表
+    if (u2kvmcopy(p->pagetable, p->kernel_pagetable, p->sz, sz) < 0) {
       return -1;
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // lab3 q3
+    // uvmdealloc() 底层调用的 uvmunmap() 函数连同物理地址一起释放, 因此在这不能调用该函数释放内核页表, 
+    // 会导致物理地址重复释放, 必须直接调用 uvmunmap() 并将第 4 个参数置零
+    if (PGROUNDUP(sz) < PGROUNDUP(p->sz)) {
+      uvmunmap(p->kernel_pagetable, PGROUNDUP(sz), (PGROUNDUP(p->sz) - PGROUNDUP(sz)) / PGSIZE, 0);
+    }
   }
   p->sz = sz;
   return 0;
@@ -273,6 +340,16 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  np->sz = p->sz;
+
+  // lab3 q3
+  // 将子进程的用户页表拷贝到子进程的内核页表
+  if(u2kvmcopy(np->pagetable, np->kernel_pagetable, 0, p->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
   np->sz = p->sz;
 
   np->parent = p;
@@ -473,8 +550,15 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        // 将当前进程的kernel page存入stap寄存器中
+        w_satp(MAKE_SATP(p->kernel_pagetable));
+        sfence_vma();
+
         swtch(&c->context, &p->context);
 
+        // 没有进程在运行则使用内核原来的kernel pagtable
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -486,6 +570,7 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
+
       asm volatile("wfi");
     }
 #else
