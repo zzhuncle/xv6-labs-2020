@@ -269,7 +269,8 @@ userinit(void)
   p->sz = PGSIZE;
 
   // lab3 q3
-  // userinit() 函数用于初始化 xv6 启动时第一个用户进程, 该进程的加载是独立的, 因此也需要将其用户页表拷贝到内核页表
+  // userinit() 函数用于初始化 xv6 启动时第一个用户进程, 该进程的加载是独立的, 
+  // 因此也需要将其用户页表拷贝到内核页表
   u2kvmcopy(p->pagetable, p->kernel_pagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.

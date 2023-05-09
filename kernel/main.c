@@ -35,6 +35,7 @@ main()
     pci_init();
     sockinit();
 #endif    
+    // The first process executes a small program written in RISC-V assembly, initcode.S
     userinit();      // first user process
     __sync_synchronize();
     started = 1;
