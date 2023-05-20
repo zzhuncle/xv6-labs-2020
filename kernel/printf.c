@@ -121,6 +121,10 @@ panic(char *s)
   printf("panic: ");
   printf(s);
   printf("\n");
+
+  // lab4 q2
+  backtrace();
+
   panicked = 1; // freeze uart output from other CPUs
   for(;;)
     ;
@@ -131,4 +135,16 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+
+// lab4 q2 hint4
+// 迭代方法，不断循环，输出当前函数的返回地址，直到到达该页表起始地址为止
+void backtrace(void) 
+{
+  uint64 fp = r_fp(); // 获取栈帧s0
+  uint64 top = PGROUNDUP(fp);
+  printf("backtrace:\n");
+  for (;fp < top;fp = *((uint64*)(fp - 16))) {
+    printf("%p\n", *((uint64*)(fp - 8)));
+  }
 }

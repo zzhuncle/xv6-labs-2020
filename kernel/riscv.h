@@ -1,3 +1,12 @@
+// lab4 q2 hint2
+// 我们需要先获取到当前函数的栈帧 fp 的值，该值存放在 s0 寄存器中
+static inline uint64 r_fp() 
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}
+
 // which hart (core) is this?
 static inline uint64
 r_mhartid()

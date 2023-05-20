@@ -38,9 +38,11 @@ usertrap(void)
 {
   int which_dev = 0;
 
+  // 检查是否来自user_mode
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
+  // 改变stvec的值指向kernelvec
   // send interrupts and exceptions to kerneltrap(),
   // since we're now in the kernel.
   w_stvec((uint64)kernelvec);
@@ -50,6 +52,7 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
+  // 发生trap的具体原因
   if(r_scause() == 8){
     // system call
 
@@ -60,12 +63,16 @@ usertrap(void)
     // but we want to return to the next instruction.
     p->trapframe->epc += 4;
 
+    // 打开interrupt
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
     intr_on();
 
-    syscall();
-  } else if((which_dev = devintr()) != 0){
+    syscall(); // ***
+  
+  }
+  // 设备中断 
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -77,8 +84,35 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  // lab4 q3 test0
+  /*if(which_dev == 2) {
+    if (p->interval) {
+      if (p->ticks == p->interval) {
+        p->ticks = 0;
+        p->trapframe->epc = p->handler;
+        // handler 函数是用户态的代码，使用的是用户页表的虚拟地址，因此只是在内核态进行赋值，
+        // 在返回到用户态后才进行执行，并没有在内核态执行 handler 代码
+      }
+      p->ticks++;
+    }
     yield();
+  }*/
+  // 如果有一个handler函数正在执行，就不能让第二个handler函数继续执行
+  // 可以直接在 sigreturn 中设置 ticks 为 0，而取消 trap.c 中的 ticks 置 0 操作。
+  // 这样，即使第一个 handler 还没执行完，由于 ticks 一直是递增的，第二个 handler 始终无法执行。
+  // 只有当 sigreturn 执行完成后，ticks 才置为 0，这样就可以等待下一个 handler 执行了。
+  if(which_dev == 2) {
+    if (p->interval) {
+      if (p->ticks == p->interval) {
+        *(p->pretrapframe) = *(p->trapframe);
+        p->trapframe->epc = p->handler;
+        // handler 函数是用户态的代码，使用的是用户页表的虚拟地址，因此只是在内核态进行赋值，
+        // 在返回到用户态后才进行执行，并没有在内核态执行 handler 代码
+      }
+      p->ticks++;
+    }
+    yield();
+  }
 
   usertrapret();
 }
@@ -112,7 +146,7 @@ usertrapret(void)
   // set S Previous Privilege mode to User.
   unsigned long x = r_sstatus();
   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
-  x |= SSTATUS_SPIE; // enable interrupts in user mode
+  x |= SSTATUS_SPIE; // enable interrupts in user mode 打开中断
   w_sstatus(x);
 
   // set S Exception Program Counter to the saved user pc.
@@ -121,6 +155,7 @@ usertrapret(void)
   // tell trampoline.S the user page table to switch to.
   uint64 satp = MAKE_SATP(p->pagetable);
 
+  // 调用userret汇编函数
   // jump to trampoline.S at the top of memory, which 
   // switches to the user page table, restores user registers,
   // and switches to user mode with sret.
