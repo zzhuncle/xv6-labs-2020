@@ -38,6 +38,24 @@ sys_wait(void)
   return wait(p);
 }
 
+// lab5 q1
+// 修改 sys_sbrk， 将 growproc 换成 growproc_lazy
+// 如果直接运行 echo hi 命令会报错，因为我们还没写分配内存的逻辑
+static int
+growproc_lazy(int n)
+{
+  struct proc *p = myproc();
+
+  // lazy allocation
+  // 只有在请求空间的时候才lazy，释放空间时直接释放即可
+  if (n < 0){
+    p->sz = uvmdealloc(p->pagetable, p->sz, p->sz + n);
+  } else {
+    p->sz += n;
+  }
+  return 0;
+}
+
 uint64
 sys_sbrk(void)
 {
@@ -47,7 +65,8 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
+  // lab5 q1
+  if(growproc_lazy(n) < 0)
     return -1;
   return addr;
 }

@@ -5,7 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+#include "spinlock.h"
+#include "proc.h"
 /*
  * the kernel's page table.
  */
@@ -91,6 +92,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
+// lab5 q3
 uint64
 walkaddr(pagetable_t pagetable, uint64 va)
 {
@@ -101,10 +103,24 @@ walkaddr(pagetable_t pagetable, uint64 va)
     return 0;
 
   pte = walk(pagetable, va, 0);
-  if(pte == 0)
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  // 由于 read/write 等系统调用时，由于进程利用系统调用已经到了内核中，页表已经切换为内核页表，无法直接访问虚拟地址。因此，需要通过 walkaddr 将虚拟地址翻译为物理地址。这里如果没找到对应的物理地址，就分配一个
+  //if(pte == 0)
+  //  return 0;
+  //if((*pte & PTE_V) == 0)
+  //  return 0;
+  if (pte == 0 || (*pte & PTE_V) == 0) {
+    struct proc *p = myproc();
+    if (va >= p->sz || va < PGROUNDUP(p->trapframe->sp))
+      return 0;
+    pa = (uint64)kalloc();
+    if (pa == 0)
+      return 0;
+    if (mappages(p->pagetable, va, PGSIZE, pa, PTE_W|PTE_R|PTE_U|PTE_X) != 0) {
+      kfree((void*)pa);
+      return 0;
+    }
+    return pa;
+  }
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -170,6 +186,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
+// lab5 q2
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
@@ -178,12 +195,16 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   if((va % PGSIZE) != 0)
     panic("uvmunmap: not aligned");
-
+  // uvmunmap 是在释放内存时调用的，由于释放内存时，页表内有些地址并没有实际分配内存，因此没有进行映射。如果在 uvmunmap 中发现了没有映射的地址，直接跳过就行
+  // 由于 Lazy allocation, 自然很可能出现虚拟地址对应的 L2 或 L1 的 PTE 就是未分配(无效)的情况, 所以此时不应该引发 panic, 同样应该跳过处理
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      continue;
+    // panic("uvmunmap: walk");
+    // 处理 uvmunmap 的报错
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue;
+    // panic("uvmunmap: not mapped");
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -305,6 +326,7 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+// lab5 q3
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
@@ -312,12 +334,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 pa, i;
   uint flags;
   char *mem;
-
+  // fork 函数在创建进程时会调用 uvmcopy 函数。
+  // 由于没有实际分配内存，因此，在这里，忽略 pte 无效，继续执行代码。
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      continue;
+    // panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
+    // panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

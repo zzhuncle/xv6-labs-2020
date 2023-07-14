@@ -33,6 +33,8 @@ trapinithart(void)
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
+// 在usertrap中根据不同的SCAUSE完成不同的操作
+// lab5 q2
 void
 usertrap(void)
 {
@@ -65,6 +67,31 @@ usertrap(void)
     intr_on();
 
     syscall();
+  } else if(r_scause() == 15 || r_scause() == 13){
+    // You can check whether a fault is a page fault by seeing if r_scause() is 13 or 15 in usertrap()
+    // r_stval() returns the RISC-V stval register, which contains the virtual address that caused the page fault.
+    uint64 va = r_stval(); // 虚拟地址
+    // printf("page fault %p\n", va);
+    uint64 ka = (uint64)kalloc(); // 实际地址
+      // 如果ka等于0，表明没有物理内存我们现在OOM了，我们会杀掉进程
+    if (ka == 0) {
+      p->killed = 1;
+    } else if (va >= p->sz || va <= PGROUNDDOWN(p->trapframe->sp)) {
+      // 检查触发page fault的虚拟地址是否小于p->sz
+      // PGROUNDDOWN(p->trapframe->sp) 是指栈顶最大值，是 guard 页的最大地址，用于防止栈溢出
+      kfree((void*) ka);
+      p->killed = 1;
+    } else {
+      // 如果有物理内存，首先会将内存内容设置为0，之后将物理内存page
+      // 指向用户地址空间中合适的虚拟内存地址
+      memset((void*) ka, 0, PGSIZE);
+      va = PGROUNDDOWN(va);
+      // 如果申请物理地址没成功或者虚拟地址超出范围了，那么杀掉进程
+      if (mappages(p->pagetable, va, PGSIZE, ka, PTE_W|PTE_U|PTE_R) != 0) {
+        kfree((void*) ka);
+        p->killed = 1;
+      }
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
