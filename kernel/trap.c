@@ -29,6 +29,66 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+
+// lab6
+// 判断一个页面是否为COW页面
+int cowpage(pagetable_t pagetable, uint64 va) {
+  if (va >= MAXVA)
+    return -1;
+  pte_t* pte = walk(pagetable, va, 0);
+  if (pte == 0)
+    return -1;
+  if ((*pte & PTE_V) == 0)
+    return -1;
+  return (*pte & PTE_F ? 0 : -1);
+}
+
+// lab6
+void* cowalloc(pagetable_t pagetable, uint64 va) {
+  if (va % PGSIZE != 0)
+    return 0;
+  
+  // 获取对应的物理地址
+  uint64 pa = walkaddr(pagetable, va); 
+  if (pa == 0)
+    return 0;
+  
+  // 获取对应的PTE
+  pte_t* pte = walk(pagetable, va, 0);
+
+  if (krefcnt((char*)pa) == 1) {
+    // 只剩一个地址对此物理地址存在引用, 则直接修改对应的PTE即可
+    *pte |= PTE_W;
+    *pte &= ~PTE_F;
+    return (void*) pa;
+  } else {
+    // 多个进程对物理内存存在引用, 需要重新分配新的页面, 并拷贝旧页面的内容
+    char* mem = kalloc();
+    if (mem == 0)
+      return 0;
+    
+    // 复制旧页面内容到新页
+    memmove(mem, (char*)pa, PGSIZE);
+
+    // 清除PTE_V, 否则在mappagees中判定为remap
+    *pte &= ~PTE_V;
+
+    // 为新页面添加映射
+    if (mappages(pagetable, va, PGSIZE, (uint64)mem, (PTE_FLAGS(*pte) | PTE_W) & ~PTE_F) != 0) {
+      kfree(mem);
+      *pte |= PTE_V;
+      return 0;
+    }
+
+    // 将原来的物理内存引用计数减1
+    kfree((char*)PGROUNDDOWN(pa));
+    return mem;
+  }
+}
+
+// lab6
+// Modify usertrap() to recognize page faults. When a page-fault occurs on a COW page, allocate a new page with kalloc(), copy the old page to the new page, and install the new page in the PTE with PTE_W set.
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -65,7 +125,13 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if(r_scause() == 13 || r_scause() == 15) {
+    // COW页面出现页面错误时, 使用kalloc()分配一个新页面, 并将旧页面复制到新页面, 然后将新页面添加到PTE中并设置PTE_W
+    uint64 fault_va = r_stval();  // 获取出错的虚拟地址
+    if (fault_va >= p->sz || cowpage(p->pagetable, fault_va) != 0 || cowalloc(p->pagetable, PGROUNDDOWN(fault_va)) == 0)
+      p->killed = 1;
+  }
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
