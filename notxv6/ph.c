@@ -5,8 +5,14 @@
 #include <pthread.h>
 #include <sys/time.h>
 
+// 哈希表的桶数
 #define NBUCKET 5
+// 要插入哈希表的键的数量
 #define NKEYS 100000
+
+// lab7 q2
+// 为了提高多线程的效率，设计一个锁数组
+pthread_mutex_t locks[NBUCKET];
 
 struct entry {
   int key;
@@ -35,6 +41,7 @@ insert(int key, int value, struct entry **p, struct entry *n)
   *p = e;
 }
 
+// lab7 q2
 static 
 void put(int key, int value)
 {
@@ -46,6 +53,8 @@ void put(int key, int value)
     if (e->key == key)
       break;
   }
+  // 添加
+  pthread_mutex_lock(&locks[i]);
   if(e){
     // update the existing key.
     e->value = value;
@@ -53,6 +62,8 @@ void put(int key, int value)
     // the new is new.
     insert(key, value, &table[i], table[i]);
   }
+  // 添加
+  pthread_mutex_unlock(&locks[i]);
 }
 
 static struct entry*

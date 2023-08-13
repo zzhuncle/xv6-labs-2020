@@ -10,14 +10,38 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
-
+// typedef unsigned long uint64;
+// lab7 q1
 struct thread {
+  // stored registers
+  uint64 ra;
+  uint64 sp;
+  // callee-saved
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
 
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
+
+// lab7 q1
+// swtch函数会保存用户进程P1对应内核线程的寄存器至context对象。所以目前为止有两类寄存器：用户寄存器存在trapframe中，内核线程的寄存器存在context中。
+// XV6中，一个CPU上运行的内核线程可以直接切换到的是这个CPU对应的调度器线程。
+// 每一个CPU核在一个时间只会做一件事情，每个CPU核在一个时间只会运行一个线程，它要么是运行用户进程的线程，要么是运行内核线程，要么是运行这个CPU核对应的调度器线程。
+// 每一个CPU都有一个完全不同的调度器线程。调度器线程也是一种内核线程，它也有自己的context对象。任何运行在CPU1上的进程，当它决定出让CPU，它都会切换到CPU1对应的调度器线程，并由调度器线程切换到下一个进程。
+
 extern void thread_switch(uint64, uint64);
               
 void 
@@ -32,6 +56,7 @@ thread_init(void)
   current_thread->state = RUNNING;
 }
 
+// lab7 q1
 void 
 thread_schedule(void)
 {
@@ -63,10 +88,12 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch((uint64)t,(uint64)next_thread);
   } else
     next_thread = 0;
 }
 
+// lab7 q1
 void 
 thread_create(void (*func)())
 {
@@ -77,6 +104,10 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  // 在thread_create()中添加保存新线程返回地址和栈指针
+  // 栈指针指向struct thread->stack的最后一个元素的地址，因为栈指针是从高地址向低地址增长的
+  t->ra = (uint64)func;
+  t->sp = (uint64)&t->stack[STACK_SIZE - 1];
 }
 
 void 

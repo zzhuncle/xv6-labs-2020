@@ -7,6 +7,10 @@
 static int nthread = 1;
 static int round = 0;
 
+
+// lab7 q3
+// 实现简单的线程屏障
+
 struct barrier {
   pthread_mutex_t barrier_mutex;
   pthread_cond_t barrier_cond;
@@ -22,6 +26,8 @@ barrier_init(void)
   bstate.nthread = 0;
 }
 
+// lab7 q3
+// 条件变量的使用方法, 一般条件变量的使用在互斥量使用的外围
 static void 
 barrier()
 {
@@ -30,7 +36,18 @@ barrier()
   // Block until all threads have called barrier() and
   // then increment bstate.round.
   //
-  
+  // printf("%d\n", bstate.round);
+  pthread_mutex_lock(&bstate.barrier_mutex);
+  bstate.nthread++; // 必须放在外面, 否则最后一个线程来的时候也会阻塞
+  if (bstate.nthread < nthread) {
+
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+  } else {
+    bstate.round++;
+    bstate.nthread = 0;
+    pthread_cond_broadcast(&bstate.barrier_cond);
+  }
+  pthread_mutex_unlock(&bstate.barrier_mutex);
 }
 
 static void *
