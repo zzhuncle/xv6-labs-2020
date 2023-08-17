@@ -175,7 +175,7 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
-
+	$U/_symlinktest
 
 
 
@@ -224,6 +224,7 @@ UPROGS += \
 	$U/_bcachetest
 endif
 
+# lab9 q2
 ifeq ($(LAB),fs)
 UPROGS += \
 	$U/_bigfile

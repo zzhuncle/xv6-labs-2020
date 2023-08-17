@@ -125,6 +125,7 @@ sys_link(void)
   if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
     return -1;
 
+  // 使用namei查询old的inode，返回指针ip，增加ip的nlink数
   begin_op();
   if((ip = namei(old)) == 0){
     end_op();
@@ -142,9 +143,11 @@ sys_link(void)
   iupdate(ip);
   iunlock(ip);
 
+  // 使用nameiparent()查询new的父目录的inode
   if((dp = nameiparent(new, name)) == 0)
     goto bad;
   ilock(dp);
+  // 然后使用dirlink()把new加入它的父目录之中
   if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
     iunlockput(dp);
     goto bad;
@@ -164,6 +167,7 @@ bad:
   end_op();
   return -1;
 }
+
 
 // Is the directory dp empty except for "." and ".." ?
 static int
@@ -283,6 +287,45 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+// lab9 q2
+// 符号链接(软链接)就是一个文件，这个文件数据块内容就是指向的文件名字
+// Implement the symlink(target, path) system call to create a new symbolic link at path that refers to target. 
+uint64
+sys_symlink(void)
+{
+  char target[MAXPATH];
+  char path[MAXPATH];
+
+  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0) {
+    return -1;
+  }
+
+  // 因为文件系统操作并不是直接执行的, 而是放到一个缓存文件中, 所以要操作添加完后再提交执行
+  begin_op();
+  struct inode *ip;
+  if ((ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  if (writei(ip, 0, (uint64)target, 0, MAXPATH) < MAXPATH) { // Write data to inode.
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  // create默认上锁返回，记得解锁
+  iunlockput(ip);
+  end_op();
+  return 0;
+}
+
+
+// lab9 q2
+// Modify the open system call to handle the case where the path refers to a symbolic link.
+// If the file does not exist, open must fail.
+// When a process specifies O_NOFOLLOW in the flags to open, open should open the symlink (and not follow the symbolic link).
+// open()“打开一个文件”，就是在SFT里找到一个空的struct file，向这项里写入需要的数据，再把这项的指针送入ofile，返回这个指针再ofile里的下标，把这个下标作为文件描述符返回。
 uint64
 sys_open(void)
 {
@@ -309,10 +352,42 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+    if (ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
       return -1;
+    }
+  }
+
+  if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
+    int depth = 10;
+    char path[MAXPATH];
+
+    for(int i = 0; i < depth; i++) {
+      // 读取文件里的字符串，放在path里
+      if (readi(ip, 0, (uint64)path, 0, MAXPATH) != MAXPATH) { // Read data from inode.
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+
+      // 释放读取的ip
+      iunlockput(ip);
+      // 根据path搜索相应inode，如果搜索失败则退出
+      if ((ip = namei(path)) == 0) { // Look up and return the inode for a path name.
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+
+      // 循环向下搜索, 搜索到非符号链接文件为止; 或者搜索深度达到10为止
+      if (ip->type != T_SYMLINK)
+        break;
+      if (i == depth - 1) {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
     }
   }
 
