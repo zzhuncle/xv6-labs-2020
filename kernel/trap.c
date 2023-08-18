@@ -5,6 +5,18 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+
+struct file {
+  enum { FD_NONE, FD_PIPE, FD_INODE, FD_DEVICE } type;
+  int ref; // reference count
+  char readable;
+  char writable;
+  struct pipe *pipe; // FD_PIPE
+  struct inode *ip;  // FD_INODE and FD_DEVICE
+  uint off;          // FD_INODE
+  short major;       // FD_DEVICE
+};
 
 struct spinlock tickslock;
 uint ticks;
@@ -29,6 +41,7 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// lab10
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -65,6 +78,60 @@ usertrap(void)
     intr_on();
 
     syscall();
+  // 处理缺页中断
+  } else if (r_scause() == 13 || r_scause() == 15) {
+    // 根据发生page fault的地址去当前进程的VMA数组中找对应的 VMA 结构体
+    uint64 va = r_stval();
+    struct vma *vma = 0;
+
+    // va必须在heap中 
+    if (va >= p->sz || va <= p->trapframe->sp)
+      goto killing;
+
+    for (int i = 0; i < NVMA; i++) {
+      if (va >= p->vma[i].addr && va < p->vma[i].addr + p->vma[i].len) {
+        vma = &p->vma[i];
+        break;
+      }
+    }
+    if (!vma) 
+      goto killing;
+
+    // 尝试为文件对象的vm分配内存
+    va = PGROUNDDOWN(va);
+    char *mem;
+    if ((mem = kalloc()) == 0)
+      goto killing;
+    memset(mem, 0, PGSIZE);
+    // 将存储在disk中的文件对象的新内容拷贝到vm
+    ilock(vma->f->ip);
+    readi(vma->f->ip, 0, (uint64) mem, va - vma->addr + vma->offset, PGSIZE);
+    iunlock(vma->f->ip);
+
+    // 根据prot设置PTE权限
+    int flags = PTE_U;
+    if (vma->prot & PROT_READ) 
+      flags |= PTE_R;
+    if (vma->prot & PROT_WRITE)
+      flags |= PTE_W;
+    if (vma->prot & PROT_EXEC)
+      flags |= PTE_X;
+
+    // 建立进程的虚拟内存与物理内存之间的联系
+    if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) != 0)
+      goto freeing;
+
+    // 顺利结束缺页中断流程
+    goto rest;
+    
+  freeing:
+    kfree(mem);
+  killing:
+    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    p->killed = 1;
+  rest:
+    ;
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {

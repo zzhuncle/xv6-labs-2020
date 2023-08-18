@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -482,5 +483,111 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+
+// lab10
+// https://blog.csdn.net/qq_34872231/article/details/129184260
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  // len is the number of bytes to map; it might not be the same as the file's length.
+  // prot indicates whether the memory should be mapped readable, writeable, and/or executable; you can assume that prot is PROT_READ or PROT_WRITE or both.
+  // You can assume offset is zero.
+  int len, prot, flags, fd, offset;
+  // fd is the open file descriptor of the file to map.
+  struct file *f;
+  struct vma *vma = 0;
+
+
+  // check arguments
+  if (argaddr(0, &addr) < 0 || argint(1, &len) < 0 || argint(2, &prot) < 0
+    || argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0)
+    return -1;
+  
+  // flags will be either MAP_SHARED, meaning that modifications to the mapped memory should be written back to the file, or MAP_PRIVATE, meaning that they should not.
+  if (flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+  
+  // the file must be written when flag is MAP_SHARED
+  if (flags == MAP_SHARED && f->writable == 0 && (prot & PROT_WRITE))
+    return -1;
+
+  // offset must be a multiple of the page size
+  if (len < 0 || offset < 0 || offset % PGSIZE)
+    return -1;
+
+  struct proc *p = myproc();
+  len = PGROUNDUP(len);
+  // p->sz Size of process memory (bytes)
+  if (p->sz + len > MAXVA)
+    return -1;
+
+  // allocate a VMA for the mapped memory
+  for (int i = 0;i < NVMA;i++) {
+    if (!p->vma[i].addr) {
+      vma = &p->vma[i];
+      break;
+    }
+  }
+
+  // VMAs all have benn used.
+  if (!vma)
+    return -1;
+
+  // You can assume that addr will always be zero, meaning that the kernel should decide the virtual address at which to map the file.
+  // mmap returns that address, or 0xffffffffffffffff if it fails.
+  vma->addr = addr ? addr : p->sz;
+  vma->len = len;
+  vma->prot = prot;
+  vma->flags = flags;
+  vma->fd = fd;
+  vma->offset = offset;
+  vma->f = f;
+  // increment ref count for file fd
+  filedup(f);
+  p->sz += len;
+  return vma->addr;
+}
+
+// lab10
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int len;
+  struct vma *vma = 0;
+  struct proc *p = myproc();
+
+  // check arguments
+  if (argaddr(0, &addr) < 0 || argint(1, &len) < 0)
+    return -1;
+  
+  addr = PGROUNDDOWN(addr);
+  len = PGROUNDUP(len);
+
+  // allocate a VMA for the mapped memory
+  for (int i = 0;i < NVMA;i++) {
+    if (p->vma[i].addr && addr >= p->vma[i].addr && addr + len <= p->vma[i].addr + p->vma[i].len) {
+      vma = &p->vma[i];
+      break;
+    }
+  }
+
+  // VMAs all have benn used.
+  if (!vma)
+    return -1;
+  if (addr != vma->addr)
+    return -1;
+
+  // 逐个释放file映射在vm中的pages
+  vma->addr += len;
+  vma->len -= len;
+  if(vma->flags & MAP_SHARED)
+    filewrite(vma->f, addr, len);
+  uvmunmap(p->pagetable, addr, len / PGSIZE, 1);
+
   return 0;
 }

@@ -260,6 +260,7 @@ growproc(int n)
   return 0;
 }
 
+// lab10
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
 int
@@ -301,6 +302,13 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+  // 子进程要拷贝父进程的vma
+  // Modify fork to ensure that the child has the same mapped regions as the parent. Don’t forget to increment the reference count for a VMA’s struct file.
+  for (int i = 0;i < NVMA; i++) {
+    memmove(&np->vma[i], &p->vma[i], sizeof(p->vma[i]));
+    if (p->vma[i].f)
+      filedup(p->vma[i].f);
+  }
 
   release(&np->lock);
 
@@ -333,6 +341,7 @@ reparent(struct proc *p)
   }
 }
 
+// lab10
 // Exit the current process.  Does not return.
 // An exited process remains in the zombie state
 // until its parent calls wait().
@@ -352,6 +361,10 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+  // 解除映射区域与物理内存的关联
+  for (int i = 0; i < NVMA; i++)
+    uvmunmap(p->pagetable, p->vma[i].addr, p->vma[i].len / PGSIZE, 1);
 
   begin_op();
   iput(p->cwd);
