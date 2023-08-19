@@ -112,6 +112,8 @@ struct tx_desc
 #define E1000_RXD_STAT_DD       0x01    /* Descriptor Done */
 #define E1000_RXD_STAT_EOP      0x02    /* End of Packet */
 
+// struct rx_desc describes the descriptor format. 
+// The array of descriptors is called the receive ring, or receive queue.
 // [E1000 3.2.3]
 struct rx_desc
 {
